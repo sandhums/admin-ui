@@ -30,6 +30,7 @@ Open **http://localhost:5174** (use `localhost`, not `127.0.0.1`, for cookie com
 1. **Register patient** → `POST /bff/his/patients`
 2. **Find slot + book** → `GET /bff/his/slots`, `POST /bff/his/appointments`
 3. **Start visit** → `POST /bff/his/encounters/start-visit`
+4. **Billing desk** (`/billing`) — charges / cash invoice (needs `billing:read`; front desk has this after BFF migration `005_front_desk_billing`)
 
 Open **http://localhost:5174/login** → sign in as **`frontdesk.demo`** / **`demo`** before using OPD booking.
 

@@ -293,6 +293,109 @@ export async function getBedBoard(params?: { ward_id?: string }): Promise<BedBoa
   return hisFetch(`bed-board${suffix}`);
 }
 
+export type DischargePatientRequest = {
+  discharge_disposition?: string;
+  destination_id?: string;
+};
+
+export async function dischargePatient(
+  encounterId: string,
+  body: DischargePatientRequest = {},
+): Promise<unknown> {
+  return hisFetch(`encounters/${encodeURIComponent(encounterId)}/discharge`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export type AdmitPatientRequest = {
+  patient_id: string;
+  bed_id: string;
+  hospital_id: string;
+  practitioner_id?: string;
+  appointment_id?: string;
+  /** HL7 admit-source: `outp` | `emd` | `other` | … */
+  admit_source?: string;
+  reason?: string;
+};
+
+export type AdmitPatientResponse = {
+  encounter_id: string;
+  bed_id: string;
+  episode_id?: string;
+};
+
+export async function admitPatient(body: AdmitPatientRequest): Promise<AdmitPatientResponse> {
+  return hisFetch("encounters/admit", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export type PatientMatchResult = {
+  patient_id: string;
+  mrn?: string;
+  name?: string;
+  birth_date?: string;
+  certainty: string;
+  match_reason: string;
+};
+
+export type MatchPatientsResponse = {
+  count: number;
+  matches: PatientMatchResult[];
+};
+
+export async function matchPatients(body: {
+  mrn?: string;
+  family_name?: string;
+  given_names?: string[];
+  birth_date?: string;
+}): Promise<MatchPatientsResponse> {
+  return hisFetch("patients/$match", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export type PatientSummary = {
+  patient_id: string;
+  mrn?: string;
+  name?: string;
+};
+
+function patientDisplayName(resource: {
+  name?: { text?: string; family?: string; given?: string[] }[];
+}): string | undefined {
+  const name = resource.name?.[0];
+  if (!name) return undefined;
+  if (name.text?.trim()) return name.text.trim();
+  const given = (name.given ?? []).join(" ").trim();
+  const parts = [given, name.family].filter(Boolean);
+  return parts.length > 0 ? parts.join(" ") : undefined;
+}
+
+function patientMrn(resource: {
+  identifier?: { system?: string; value?: string }[];
+}): string | undefined {
+  const identifiers = resource.identifier ?? [];
+  const atrius = identifiers.find((id) => id.system?.includes("mrn") || id.value?.startsWith("MRN-"));
+  return atrius?.value ?? identifiers[0]?.value;
+}
+
+export async function getPatient(patientId: string): Promise<PatientSummary> {
+  const resource = await hisFetch<{
+    id?: string;
+    name?: { text?: string; family?: string; given?: string[] }[];
+    identifier?: { system?: string; value?: string }[];
+  }>(`patients/${encodeURIComponent(patientId)}`);
+  return {
+    patient_id: resource.id ?? patientId,
+    mrn: patientMrn(resource),
+    name: patientDisplayName(resource),
+  };
+}
+
 export type FoundationConfig = {
   tenant_id: string;
   organization: { id: string; name: string; active: boolean };
@@ -343,4 +446,236 @@ export type ListHospitalsResponse = {
 
 export async function listHospitals(): Promise<ListHospitalsResponse> {
   return hisFetch("foundation/hospitals");
+}
+
+// --- Billing desk ---
+
+export type BillingItemSummary = {
+  id: string;
+  code: string;
+  title: string;
+  item_type?: string;
+  hsn_sac?: string;
+  gst_rate_class?: string;
+  base_amount_inr?: number;
+  schedule_id?: string;
+  status?: string;
+};
+
+export type BillingItemListResponse = {
+  items: BillingItemSummary[];
+};
+
+export type ChargeSummary = {
+  id: string;
+  status: string;
+  code?: string;
+  display?: string;
+  encounter_id?: string;
+  patient_id?: string;
+  performer_id?: string;
+  department_id?: string;
+  unit_price_inr?: number;
+  quantity?: number;
+};
+
+export type ListChargesResponse = {
+  charges: ChargeSummary[];
+};
+
+export type PostChargeRequest = {
+  encounter_id: string;
+  hospital_id: string;
+  billing_code: string;
+  quantity?: number;
+  schedule_id?: string;
+  performer_practitioner_id?: string;
+  department_id?: string;
+  place_of_supply_state?: string;
+  hospital_state?: string;
+};
+
+export type PostChargeResponse = {
+  charge: ChargeSummary;
+};
+
+export type IssueInvoiceRequest = {
+  encounter_id: string;
+  hospital_id: string;
+  place_of_supply_state: string;
+  hospital_state?: string;
+  charge_item_ids?: string[];
+};
+
+export type InvoiceSummary = {
+  id: string;
+  status: string;
+  total_net_inr?: number;
+  total_gross_inr?: number;
+  patient_id?: string;
+};
+
+export type IssueInvoiceResponse = {
+  invoice: InvoiceSummary;
+};
+
+export type CreditNoteRequest = {
+  encounter_id: string;
+  hospital_id: string;
+  place_of_supply_state: string;
+  hospital_state?: string;
+  original_invoice_id: string;
+  charge_item_ids: string[];
+  reason: string;
+};
+
+export type AdjustChargeRequest = {
+  reason: string;
+  quantity?: number;
+  unit_price_inr?: number;
+};
+
+export async function listBillingItems(scheduleId?: string): Promise<BillingItemListResponse> {
+  const qs = scheduleId ? `?schedule_id=${encodeURIComponent(scheduleId)}` : "";
+  return hisFetch(`billing-items${qs}`);
+}
+
+export async function seedDemoTariff(hospitalId?: string): Promise<{ created: string[] }> {
+  const qs = hospitalId ? `?hospital_id=${encodeURIComponent(hospitalId)}` : "";
+  return hisFetch(`billing-catalog/seed-demo${qs}`, { method: "POST", body: "{}" });
+}
+
+export async function listEncounterCharges(
+  encounterId: string,
+  status?: string,
+): Promise<ListChargesResponse> {
+  const qs = status ? `?status=${encodeURIComponent(status)}` : "";
+  return hisFetch(`encounters/${encounterId}/charges${qs}`);
+}
+
+export async function postCharge(body: PostChargeRequest): Promise<PostChargeResponse> {
+  return hisFetch("charges", { method: "POST", body: JSON.stringify(body) });
+}
+
+export async function voidCharge(chargeId: string): Promise<ChargeSummary> {
+  return hisFetch(`charges/${encodeURIComponent(chargeId)}/void`, {
+    method: "POST",
+    body: "{}",
+  });
+}
+
+export async function adjustCharge(
+  chargeId: string,
+  body: AdjustChargeRequest,
+): Promise<ChargeSummary> {
+  return hisFetch(`charges/${encodeURIComponent(chargeId)}/adjust`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function issueCashInvoice(body: IssueInvoiceRequest): Promise<IssueInvoiceResponse> {
+  return hisFetch("invoices/cash", { method: "POST", body: JSON.stringify(body) });
+}
+
+export async function issueCreditNote(body: CreditNoteRequest): Promise<IssueInvoiceResponse> {
+  return hisFetch("invoices/credit-note", { method: "POST", body: JSON.stringify(body) });
+}
+
+// --- Claims desk ---
+
+export type CoverageSummary = {
+  id: string;
+  status: string;
+  patient_id?: string;
+  payor_organization_id?: string;
+  subscriber_id?: string;
+};
+
+export type AttachCoverageRequest = {
+  patient_id: string;
+  payor_organization_id: string;
+  subscriber_id?: string;
+  payer_type_display?: string;
+  id?: string;
+};
+
+export type ClaimSummary = {
+  id: string;
+  status: string;
+  patient_id?: string;
+  total_inr?: number;
+};
+
+export type CreateClaimRequest = {
+  encounter_id: string;
+  hospital_id: string;
+  coverage_id: string;
+  insurer_organization_id: string;
+  charge_item_ids?: string[];
+  place_of_supply_state?: string;
+  hospital_state?: string;
+};
+
+export type CreateClaimResponse = {
+  claim: ClaimSummary;
+};
+
+export type EligibilityRequest = {
+  patient_id: string;
+  hospital_id: string;
+  coverage_id: string;
+  insurer_organization_id: string;
+};
+
+export type EligibilityResponse = {
+  request_id: string;
+  status: string;
+};
+
+export async function attachCoverage(body: AttachCoverageRequest): Promise<CoverageSummary> {
+  return hisFetch("coverages", { method: "POST", body: JSON.stringify(body) });
+}
+
+export async function listPatientCoverages(patientId: string): Promise<CoverageSummary[]> {
+  return hisFetch(`patients/${encodeURIComponent(patientId)}/coverages`);
+}
+
+export async function getCoverage(coverageId: string): Promise<CoverageSummary> {
+  return hisFetch(`coverages/${encodeURIComponent(coverageId)}`);
+}
+
+export async function requestEligibility(
+  body: EligibilityRequest,
+): Promise<EligibilityResponse> {
+  return hisFetch("coverage-eligibility", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function createClaim(body: CreateClaimRequest): Promise<CreateClaimResponse> {
+  return hisFetch("claims", { method: "POST", body: JSON.stringify(body) });
+}
+
+export async function getClaim(claimId: string): Promise<ClaimSummary> {
+  return hisFetch(`claims/${encodeURIComponent(claimId)}`);
+}
+
+export async function cancelClaim(claimId: string): Promise<ClaimSummary> {
+  return hisFetch(`claims/${encodeURIComponent(claimId)}/cancel`, {
+    method: "POST",
+    body: "{}",
+  });
+}
+
+export async function exportClaimBundle(
+  claimId: string,
+  params?: { include_patient?: boolean; include_coverage?: boolean },
+): Promise<unknown> {
+  const qs = new URLSearchParams();
+  if (params?.include_patient === false) qs.set("include_patient", "false");
+  if (params?.include_coverage === false) qs.set("include_coverage", "false");
+  const suffix = qs.size > 0 ? `?${qs.toString()}` : "";
+  return hisFetch(`claims/${encodeURIComponent(claimId)}/$export-bundle${suffix}`);
 }

@@ -25,6 +25,12 @@ export default function AdminLayout({ title, subtitle, children }: AdminLayoutPr
     { path: "/", label: "OPD front desk" },
     { path: "/scheduling", label: "Scheduling board" },
     { path: "/beds", label: "Bed board" },
+    ...(hasPermission(session, "billing:read")
+      ? [
+          { path: "/billing", label: "Billing desk" },
+          { path: "/claims", label: "Claims desk" },
+        ]
+      : []),
     ...(hasPermission(session, "config:read")
       ? [{ path: "/admin", label: "Configuration" }]
       : []),

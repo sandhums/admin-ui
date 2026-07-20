@@ -16,6 +16,17 @@ export function campusForHospital(hospitalId: string): string | undefined {
   return undefined;
 }
 
+/** GST registration state for a campus Organization id (ISO 3166-2 IN subdivision). */
+export function hospitalGstState(hospitalId?: string | null): string {
+  switch ((hospitalId ?? "").trim()) {
+    case "atrius-goa":
+      return "GA";
+    case "atrius-gurugram":
+    default:
+      return "HR";
+  }
+}
+
 export function filterDoctorsForHospital(
   doctors: BookingDoctor[],
   hospitalId?: string | null,

@@ -4,6 +4,8 @@ import AdminConfigPage from "./pages/AdminConfigPage";
 import AdminRolesPage from "./pages/AdminRolesPage";
 import AdminUsersPage from "./pages/AdminUsersPage";
 import BedBoardPage from "./pages/BedBoardPage";
+import BillingDeskPage from "./pages/BillingDeskPage";
+import ClaimsDeskPage from "./pages/ClaimsDeskPage";
 import LoginPage from "./pages/LoginPage";
 import AuthErrorPage from "./pages/AuthErrorPage";
 import OpdWorkflowPage from "./pages/OpdWorkflowPage";
@@ -38,6 +40,26 @@ export default function App() {
             element={
               <RequireAuth>
                 <BedBoardPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/billing"
+            element={
+              <RequireAuth>
+                <RequirePermission permission="billing:read">
+                  <BillingDeskPage />
+                </RequirePermission>
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/claims"
+            element={
+              <RequireAuth>
+                <RequirePermission permission="billing:read">
+                  <ClaimsDeskPage />
+                </RequirePermission>
               </RequireAuth>
             }
           />
