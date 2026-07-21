@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   attachCoverage,
   cancelClaim,
@@ -20,10 +21,13 @@ import { useAuth } from "../context/AuthContext";
 export default function ClaimsDeskPage() {
   const { session } = useAuth();
   const canWrite = hasPermission(session, "billing:write");
+  const [searchParams] = useSearchParams();
 
-  const [patientId, setPatientId] = useState("");
-  const [encounterId, setEncounterId] = useState("");
-  const [hospitalId, setHospitalId] = useState(session?.hospital_id ?? "");
+  const [patientId, setPatientId] = useState(() => searchParams.get("patientId") ?? "");
+  const [encounterId, setEncounterId] = useState(() => searchParams.get("encounterId") ?? "");
+  const [hospitalId, setHospitalId] = useState(
+    () => searchParams.get("hospitalId") ?? session?.hospital_id ?? "",
+  );
   const [hospitalState, setHospitalState] = useState(hospitalGstState(session?.hospital_id));
   const [placeOfSupply, setPlaceOfSupply] = useState(hospitalGstState(session?.hospital_id));
   const [payorOrgId, setPayorOrgId] = useState("org-demo-insurer");
@@ -90,6 +94,14 @@ export default function ClaimsDeskPage() {
       setBusy(false);
     }
   }, [encounterId, patientId]);
+
+  // Auto-load when opened from Ops census deep-link (IDs already seeded from URL).
+  useEffect(() => {
+    if (!session?.authenticated) return;
+    if (searchParams.get("patientId")?.trim()) void loadCoverages();
+    if (searchParams.get("encounterId")?.trim()) void loadCharges();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot seed from URL
+  }, [session?.authenticated]);
 
   async function onAttachCoverage() {
     if (!canWrite) return;
@@ -258,6 +270,9 @@ export default function ClaimsDeskPage() {
 
       <section className="panel">
         <h2>Context</h2>
+        <p className="muted">
+          Pick an active visit from the <Link to="/census">Ops census</Link>.
+        </p>
         <div className="form grid-2">
           <label>
             Patient ID

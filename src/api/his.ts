@@ -293,6 +293,45 @@ export async function getBedBoard(params?: { ward_id?: string }): Promise<BedBoa
   return hisFetch(`bed-board${suffix}`);
 }
 
+/** Active (or filtered) encounter row from `GET /encounters` census. */
+export type EncounterSummary = {
+  encounter_id: string;
+  patient_id?: string;
+  patient_name?: string;
+  status: string;
+  class_code?: string;
+  class_display?: string;
+  reason?: string;
+  location_id?: string;
+  location_name?: string;
+  bed_id?: string;
+  ward_id?: string;
+  period_start?: string;
+  appointment_id?: string;
+  practitioner_id?: string;
+  hospital_id?: string;
+};
+
+export type EncounterCensusResponse = {
+  count: number;
+  encounters: EncounterSummary[];
+};
+
+export async function listEncounters(params?: {
+  status?: string;
+  class?: string;
+  hospital_id?: string;
+  _count?: number;
+}): Promise<EncounterCensusResponse> {
+  const qs = new URLSearchParams();
+  if (params?.status) qs.set("status", params.status);
+  if (params?.class) qs.set("class", params.class);
+  if (params?.hospital_id) qs.set("hospital_id", params.hospital_id);
+  if (params?._count != null) qs.set("_count", String(params._count));
+  const suffix = qs.size > 0 ? `?${qs.toString()}` : "";
+  return hisFetch(`encounters${suffix}`);
+}
+
 export type DischargePatientRequest = {
   discharge_disposition?: string;
   destination_id?: string;

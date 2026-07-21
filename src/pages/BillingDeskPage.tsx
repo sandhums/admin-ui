@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   adjustCharge,
   issueCashInvoice,
@@ -18,8 +19,12 @@ import { useAuth } from "../context/AuthContext";
 
 export default function BillingDeskPage() {
   const { session } = useAuth();
-  const [encounterId, setEncounterId] = useState("");
-  const [hospitalId, setHospitalId] = useState(session?.hospital_id ?? "");
+  const [searchParams] = useSearchParams();
+  const [encounterId, setEncounterId] = useState(() => searchParams.get("encounterId") ?? "");
+  const [hospitalId, setHospitalId] = useState(
+    () => searchParams.get("hospitalId") ?? session?.hospital_id ?? "",
+  );
+  const patientIdFromUrl = searchParams.get("patientId") ?? "";
   const [hospitalState, setHospitalState] = useState(
     hospitalGstState(session?.hospital_id),
   );
@@ -81,6 +86,13 @@ export default function BillingDeskPage() {
     if (!session?.authenticated) return;
     void loadCatalog();
   }, [session?.authenticated, loadCatalog]);
+
+  // Auto-load when opened from Ops census deep-link.
+  useEffect(() => {
+    if (!session?.authenticated) return;
+    if (searchParams.get("encounterId")?.trim()) void loadCharges();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- one-shot seed from URL
+  }, [session?.authenticated]);
 
   async function onSeed() {
     setBusy(true);
@@ -278,6 +290,16 @@ export default function BillingDeskPage() {
 
       <section className="panel">
         <h2>Context</h2>
+        <p className="muted">
+          Pick an active visit from the <Link to="/census">Ops census</Link>
+          {patientIdFromUrl ? (
+            <>
+              {" "}
+              · patient <code>{patientIdFromUrl}</code>
+            </>
+          ) : null}
+          .
+        </p>
         <label>
           Encounter ID
           <input

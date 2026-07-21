@@ -9,6 +9,7 @@ import ClaimsDeskPage from "./pages/ClaimsDeskPage";
 import LoginPage from "./pages/LoginPage";
 import AuthErrorPage from "./pages/AuthErrorPage";
 import OpdWorkflowPage from "./pages/OpdWorkflowPage";
+import OpsCensusPage from "./pages/OpsCensusPage";
 import SchedulingBoardPage from "./pages/SchedulingBoardPage";
 import RequireAuth from "./components/RequireAuth";
 import RequirePermission from "./components/RequirePermission";
@@ -40,6 +41,14 @@ export default function App() {
             element={
               <RequireAuth>
                 <BedBoardPage />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/census"
+            element={
+              <RequireAuth>
+                <OpsCensusPage />
               </RequireAuth>
             }
           />
