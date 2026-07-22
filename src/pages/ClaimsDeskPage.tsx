@@ -6,6 +6,7 @@ import {
   createClaim,
   exportClaimBundle,
   getClaim,
+  ingestClaimResponse,
   listEncounterCharges,
   listPatientCoverages,
   requestEligibility,
@@ -21,6 +22,8 @@ import { useAuth } from "../context/AuthContext";
 export default function ClaimsDeskPage() {
   const { session } = useAuth();
   const canWrite = hasPermission(session, "billing:write");
+  const canSubmitClaims =
+    hasPermission(session, "claims:submit") || canWrite;
   const [searchParams] = useSearchParams();
 
   const [patientId, setPatientId] = useState(() => searchParams.get("patientId") ?? "");
@@ -40,6 +43,13 @@ export default function ClaimsDeskPage() {
   const [selectedCharges, setSelectedCharges] = useState<Set<string>>(new Set());
   const [lastClaim, setLastClaim] = useState<ClaimSummary | null>(null);
   const [exportPreview, setExportPreview] = useState<string | null>(null);
+  const [claimResponseJson, setClaimResponseJson] = useState(
+    '{\n  "outcome": "complete",\n  "status": "active"\n}',
+  );
+  const [lastClaimResponse, setLastClaimResponse] = useState<Record<
+    string,
+    unknown
+  > | null>(null);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -154,7 +164,7 @@ export default function ClaimsDeskPage() {
   }
 
   async function onCreateClaim() {
-    if (!canWrite) return;
+    if (!canSubmitClaims) return;
     if (!encounterId.trim() || !coverageId.trim() || !hospitalId.trim()) {
       setError("Encounter, coverage, and hospital are required");
       return;
@@ -204,6 +214,36 @@ export default function ClaimsDeskPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setExportPreview(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function onIngestClaimResponse() {
+    if (!canSubmitClaims) return;
+    const id = claimId.trim() || lastClaim?.id;
+    if (!id) {
+      setError("Enter or create a claim id first");
+      return;
+    }
+    let body: Record<string, unknown>;
+    try {
+      body = JSON.parse(claimResponseJson) as Record<string, unknown>;
+    } catch {
+      setError("ClaimResponse JSON is invalid");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    setMessage(null);
+    try {
+      const res = await ingestClaimResponse(id, body);
+      setLastClaimResponse(res);
+      setMessage(
+        `Ingested ClaimResponse ${String(res.id ?? "?")} for claim ${id} · outcome ${String(res.outcome ?? "—")}`,
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
@@ -264,8 +304,15 @@ export default function ClaimsDeskPage() {
     >
       {error ? <p className="error">{error}</p> : null}
       {message ? <p className="success">{message}</p> : null}
-      {!canWrite ? (
-        <p className="muted">Read-only — need billing:write to attach coverage or create claims.</p>
+      {!canWrite && !canSubmitClaims ? (
+        <p className="muted">
+          Read-only — need billing:write (coverage) or claims:submit (claims).
+        </p>
+      ) : null}
+      {canWrite && !canSubmitClaims ? (
+        <p className="muted">
+          You can manage coverage; claim create / ClaimResponse need claims:submit.
+        </p>
       ) : null}
 
       <section className="panel">
@@ -436,7 +483,11 @@ export default function ClaimsDeskPage() {
         <p className="muted">
           Leave checkboxes empty to claim all billable lines on the encounter.
         </p>
-        <button type="button" disabled={busy || !canWrite} onClick={() => void onCreateClaim()}>
+        <button
+          type="button"
+          disabled={busy || !canSubmitClaims}
+          onClick={() => void onCreateClaim()}
+        >
           Create claim
         </button>
       </section>
@@ -475,6 +526,34 @@ export default function ClaimsDeskPage() {
         ) : null}
         {exportPreview ? (
           <pre className="export-preview">{exportPreview}</pre>
+        ) : null}
+      </section>
+
+      <section className="panel">
+        <h2>ClaimResponse ingest</h2>
+        <p className="muted">
+          Paste insurer / ABDM ClaimResponse JSON (id optional). Requires claims:submit.
+        </p>
+        <label>
+          ClaimResponse JSON
+          <textarea
+            rows={8}
+            value={claimResponseJson}
+            onChange={(e) => setClaimResponseJson(e.target.value)}
+            disabled={!canSubmitClaims || busy}
+          />
+        </label>
+        <button
+          type="button"
+          disabled={busy || !canSubmitClaims}
+          onClick={() => void onIngestClaimResponse()}
+        >
+          Ingest ClaimResponse
+        </button>
+        {lastClaimResponse ? (
+          <pre className="export-preview">
+            {JSON.stringify(lastClaimResponse, null, 2)}
+          </pre>
         ) : null}
       </section>
     </AdminLayout>

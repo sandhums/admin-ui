@@ -718,3 +718,54 @@ export async function exportClaimBundle(
   const suffix = qs.size > 0 ? `?${qs.toString()}` : "";
   return hisFetch(`claims/${encodeURIComponent(claimId)}/$export-bundle${suffix}`);
 }
+
+export type MasterKind =
+  | "billing-items"
+  | "schedule-of-charges"
+  | "gst-rates"
+  | "payors"
+  | "vendors"
+  | "lab-catalog"
+  | "imaging-catalog";
+
+export type MasterUploadRequest = {
+  kind: MasterKind;
+  dry_run?: boolean;
+  csv?: string;
+  xlsx_base64?: string;
+  hospital_id?: string;
+  schedule_id?: string;
+};
+
+export type MasterUploadRowError = {
+  row: number;
+  message: string;
+};
+
+export type MasterUploadResponse = {
+  kind: MasterKind;
+  dry_run: boolean;
+  accepted: number;
+  rejected: number;
+  errors: MasterUploadRowError[];
+  resource_ids: string[];
+};
+
+export async function uploadMasters(
+  body: MasterUploadRequest,
+): Promise<MasterUploadResponse> {
+  return hisFetch("masters/upload", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function ingestClaimResponse(
+  claimId: string,
+  body: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  return hisFetch(`claims/${encodeURIComponent(claimId)}/claim-response`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}

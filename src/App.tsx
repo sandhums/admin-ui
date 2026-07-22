@@ -10,6 +10,7 @@ import LoginPage from "./pages/LoginPage";
 import AuthErrorPage from "./pages/AuthErrorPage";
 import OpdWorkflowPage from "./pages/OpdWorkflowPage";
 import OpsCensusPage from "./pages/OpsCensusPage";
+import MastersUploadPage from "./pages/MastersUploadPage";
 import SchedulingBoardPage from "./pages/SchedulingBoardPage";
 import RequireAuth from "./components/RequireAuth";
 import RequirePermission from "./components/RequirePermission";
@@ -68,6 +69,16 @@ export default function App() {
               <RequireAuth>
                 <RequirePermission permission="billing:read">
                   <ClaimsDeskPage />
+                </RequirePermission>
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/admin/masters"
+            element={
+              <RequireAuth>
+                <RequirePermission permission="billing:write">
+                  <MastersUploadPage />
                 </RequirePermission>
               </RequireAuth>
             }
