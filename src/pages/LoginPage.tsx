@@ -1,13 +1,15 @@
 import type { FormEvent } from "react";
-import { useEffect, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
-import { getSession, staffDevLogin, staffLoginUrl } from "../api/bff";
+import { useEffect, useMemo, useState } from "react";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { formatApiError, getSession, staffDevLogin, staffLoginUrl } from "../api/bff";
+import { safeReturnPath } from "../components/RequireAuth";
 import { useAuth } from "../context/AuthContext";
 import { navigateToLanding } from "../lib/navigateLanding";
 
 export default function LoginPage() {
   const navigate = useNavigate();
   const location = useLocation();
+  const [searchParams] = useSearchParams();
   const { session, refresh } = useAuth();
   const [username, setUsername] = useState("frontdesk.demo");
   const [password, setPassword] = useState("demo");
@@ -15,7 +17,13 @@ export default function LoginPage() {
   const [busy, setBusy] = useState(false);
   const [showDevLogin, setShowDevLogin] = useState(false);
 
-  const returnTo = (location.state as { from?: string } | null)?.from ?? "/";
+  const returnTo = useMemo(() => {
+    const fromQuery = searchParams.get("from");
+    const fromState = (location.state as { from?: string } | null)?.from;
+    return safeReturnPath(fromQuery ?? fromState ?? null, "/");
+  }, [location.state, searchParams]);
+
+  const sessionExpired = searchParams.get("expired") === "1";
 
   useEffect(() => {
     if (!session?.authenticated) return;
@@ -44,7 +52,7 @@ export default function LoginPage() {
         navigateToLanding(navigate, s.landing_path);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(formatApiError(err));
     } finally {
       setBusy(false);
     }
@@ -57,6 +65,9 @@ export default function LoginPage() {
         <p className="muted">
           Sign in with your hospital account to use front desk and admin workflows.
         </p>
+        {sessionExpired ? (
+          <p className="error">Your session expired. Sign in again to continue.</p>
+        ) : null}
       </header>
       <div className="card form">
         <button type="button" onClick={signInWithHospitalAccount}>

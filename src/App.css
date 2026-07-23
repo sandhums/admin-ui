@@ -394,6 +394,19 @@ button.danger:hover:not(:disabled) {
   font-size: 1.1rem;
 }
 
+.billing-action-panel {
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid #d0d7de;
+  border-radius: 8px;
+  background: #f6f8fa;
+}
+
+.billing-action-panel h3 {
+  margin: 0 0 0.75rem;
+  font-size: 1rem;
+}
+
 .card h2 {
   margin-top: 0;
   font-size: 1.1rem;

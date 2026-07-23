@@ -38,6 +38,12 @@ export function filterDoctorsForHospital(
   return filtered.length > 0 ? filtered : doctors;
 }
 
+/** Fallback hospitals when GET /foundation/hospitals fails or returns empty. */
+export const DEFAULT_HOSPITALS: { id: string; name: string; active: boolean }[] = [
+  { id: "atrius-gurugram", name: "Atrius Gurugram", active: true },
+  { id: "atrius-goa", name: "Atrius Goa", active: true },
+];
+
 /** Fallback when GET /booking-doctors is unavailable (e.g. older his-server). */
 export const DEFAULT_BOOKING_DOCTORS: BookingDoctor[] = [
   {

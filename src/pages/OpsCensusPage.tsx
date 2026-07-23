@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { listEncounters, type EncounterSummary } from "../api/his";
+import {
+  listEncounters,
+  listHospitals,
+  type EncounterSummary,
+  type HospitalSummary,
+} from "../api/his";
 import AdminLayout from "../components/AdminLayout";
 import { useAuth } from "../context/AuthContext";
+import { formatApiError } from "../api/bff";
+import { DEFAULT_HOSPITALS, campusForHospital } from "../constants";
 
 function formatWhen(iso?: string) {
   if (!iso) return "—";
@@ -35,35 +42,83 @@ function deskLink(
   return `${path}?${qs.toString()}`;
 }
 
+/** Accept Organization hospital ids or demo campus Location ids. */
+function normalizeHospitalFilter(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed || trimmed === "all") return "";
+  if (trimmed === "campus-gurugram") return "atrius-gurugram";
+  if (trimmed === "campus-goa") return "atrius-goa";
+  return trimmed;
+}
+
+function pickHospitalId(
+  current: string,
+  hospitals: HospitalSummary[],
+  sessionHospitalId?: string | null,
+): string {
+  if (current === "all") return "all";
+  if (current && hospitals.some((h) => h.id === current)) return current;
+  if (sessionHospitalId && hospitals.some((h) => h.id === sessionHospitalId)) {
+    return sessionHospitalId;
+  }
+  return hospitals[0]?.id ?? "all";
+}
+
 export default function OpsCensusPage() {
   const { session } = useAuth();
   const [status, setStatus] = useState("in-progress");
   const [classCode, setClassCode] = useState("");
+  const [hospitals, setHospitals] = useState<HospitalSummary[]>([]);
   const [hospitalId, setHospitalId] = useState(session?.hospital_id ?? "");
   const [encounters, setEncounters] = useState<EncounterSummary[]>([]);
   const [busy, setBusy] = useState(false);
+  const [hospitalsLoading, setHospitalsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
 
   useEffect(() => {
-    if (session?.hospital_id && !hospitalId) {
-      setHospitalId(session.hospital_id);
-    }
-  }, [session?.hospital_id, hospitalId]);
+    let cancelled = false;
+    setHospitalsLoading(true);
+    void listHospitals()
+      .then((res) => {
+        if (cancelled) return;
+        const list =
+          res.hospitals.length > 0
+            ? res.hospitals
+            : DEFAULT_HOSPITALS.map((h) => ({ ...h }));
+        setHospitals(list);
+        setHospitalId((current) => pickHospitalId(current, list, session?.hospital_id));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        const list = DEFAULT_HOSPITALS.map((h) => ({ ...h }));
+        setHospitals(list);
+        setHospitalId((current) => pickHospitalId(current, list, session?.hospital_id));
+      })
+      .finally(() => {
+        if (!cancelled) setHospitalsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.hospital_id]);
 
   const load = useCallback(async () => {
     setBusy(true);
     setError(null);
     try {
+      // `all` is sent explicitly so HIS clears session X-Hospital-ID scoping.
+      const scopedHospital =
+        !hospitalId || hospitalId === "all" ? "all" : normalizeHospitalFilter(hospitalId);
       const res = await listEncounters({
         status: status || undefined,
         class: classCode || undefined,
-        hospital_id: hospitalId.trim() || undefined,
+        hospital_id: scopedHospital || undefined,
         _count: 100,
       });
-      setEncounters(res.encounters);
+      setEncounters(Array.isArray(res.encounters) ? res.encounters : []);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(formatApiError(e));
       setEncounters([]);
     } finally {
       setBusy(false);
@@ -71,15 +126,23 @@ export default function OpsCensusPage() {
   }, [status, classCode, hospitalId]);
 
   useEffect(() => {
-    if (!session?.authenticated) return;
+    if (!session?.authenticated || hospitalsLoading) return;
     void load();
-  }, [session?.authenticated, load]);
+  }, [session?.authenticated, hospitalsLoading, load]);
 
   async function onCopy(label: string, value: string) {
     await copyText(value);
     setCopied(label);
     window.setTimeout(() => setCopied(null), 1500);
   }
+
+  const filterSummary = [
+    `status=${status || "in-progress"}`,
+    classCode ? `class=${classCode}` : "class=all",
+    hospitalId && hospitalId !== "all"
+      ? `hospital=${normalizeHospitalFilter(hospitalId) || hospitalId}`
+      : "hospital=all",
+  ].join(" · ");
 
   return (
     <AdminLayout
@@ -89,20 +152,21 @@ export default function OpsCensusPage() {
       {error ? <p className="error">{error}</p> : null}
       {copied ? <p className="success">Copied {copied}</p> : null}
 
-      <section className="panel">
+      <section className="card">
         <h2>Filters</h2>
-        <div className="form grid-2">
+        <div className="board-toolbar">
           <label>
             Status
-            <select value={status} onChange={(e) => setStatus(e.target.value)}>
+            <select value={status} onChange={(e) => setStatus(e.target.value)} disabled={busy}>
               <option value="in-progress">in-progress</option>
               <option value="finished">finished</option>
               <option value="cancelled">cancelled</option>
+              <option value="all">all statuses</option>
             </select>
           </label>
           <label>
             Class
-            <select value={classCode} onChange={(e) => setClassCode(e.target.value)}>
+            <select value={classCode} onChange={(e) => setClassCode(e.target.value)} disabled={busy}>
               <option value="">All</option>
               <option value="AMB">AMB (OPD)</option>
               <option value="IMP">IMP (IPD)</option>
@@ -110,29 +174,43 @@ export default function OpsCensusPage() {
             </select>
           </label>
           <label>
-            Hospital ID
-            <input
+            Hospital
+            <select
               value={hospitalId}
+              disabled={busy || hospitalsLoading || hospitals.length === 0}
               onChange={(e) => setHospitalId(e.target.value)}
-              placeholder="atrius-gurugram (optional)"
-            />
+            >
+              <option value="all">All hospitals</option>
+              {hospitals.map((hospital) => (
+                <option key={hospital.id} value={hospital.id}>
+                  {hospital.name} ({hospital.id})
+                </option>
+              ))}
+            </select>
           </label>
         </div>
+        {hospitalId && hospitalId !== "all" ? (
+          <p className="muted">
+            Campus map: <code>{campusForHospital(hospitalId) ?? "—"}</code>
+          </p>
+        ) : null}
         <div className="row">
-          <button type="button" disabled={busy} onClick={() => void load()}>
+          <button type="button" disabled={busy || hospitalsLoading} onClick={() => void load()}>
             {busy ? "Loading…" : "Refresh"}
           </button>
           <span className="muted">{encounters.length} encounter(s)</span>
         </div>
       </section>
 
-      <section className="panel">
+      <section className="card">
         <h2>Encounters</h2>
         {busy && encounters.length === 0 ? <p className="muted">Loading census…</p> : null}
         {!busy && encounters.length === 0 ? (
           <p className="muted">
-            No encounters match. Start a visit from OPD front desk or admit from the bed board, then
-            refresh.
+            No encounters match ({filterSummary}). Try <strong>all statuses</strong>, clear class,
+            or pick the hospital where visits were started (Gurugram demo data is{" "}
+            <code>atrius-gurugram</code>). Start a visit from OPD front desk or admit from the bed
+            board, then refresh.
           </p>
         ) : null}
 

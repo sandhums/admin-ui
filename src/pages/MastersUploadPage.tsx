@@ -1,8 +1,32 @@
-import { useMemo, useState } from "react";
-import { uploadMasters, type MasterKind, type MasterUploadResponse } from "../api/his";
+import { useEffect, useMemo, useState } from "react";
+import {
+  listHospitals,
+  uploadMasters,
+  type HospitalSummary,
+  type MasterKind,
+  type MasterUploadResponse,
+} from "../api/his";
 import AdminLayout from "../components/AdminLayout";
 import { hasPermission } from "../components/RequirePermission";
 import { useAuth } from "../context/AuthContext";
+import { formatApiError } from "../api/bff";
+
+const CSV_TEMPLATES: Record<MasterKind, string> = {
+  "billing-items":
+    "code,title,item_type,hsn_sac,gst_rate_class,department_id,effective_from\n",
+  "schedule-of-charges":
+    "code,title,item_type,base_amount_inr,hsn_sac,gst_rate_class,schedule_id,payer_org,bed_category,visit_class,effective_from\n",
+  "gst-rates": "hsn_sac,gst_rate_class,effective_from,effective_to\n",
+  payors: "code,name,phone,email\n",
+  vendors: "code,name,phone,email\n",
+  "lab-catalog": "code,display,billing_code\n",
+  "imaging-catalog": "code,display,billing_code\n",
+  "payer-contracts":
+    "payor_org,schedule_id,category,hospital_id,title,effective_from,default_discount_pct,discount_pharmacy_pct,discount_lab_pct,uncontracted_behavior,cash_schedule_id\n",
+  packages:
+    "package_code,title,schedule_id,payer_org,bed_category,package_amount_inr,included_los_days,included_item_types,excluded_codes,beyond_los_policy,per_day_rate\n",
+  "payer-code-maps": "payer_org,payer_code,payer_display,hospital_billing_code\n",
+};
 
 const KINDS: { value: MasterKind; label: string; hint: string }[] = [
   { value: "billing-items", label: "Billing items", hint: "Item master (code, title, type, default amount)" },
@@ -12,6 +36,21 @@ const KINDS: { value: MasterKind; label: string; hint: string }[] = [
   { value: "vendors", label: "Vendors", hint: "Supply vendor Organizations" },
   { value: "lab-catalog", label: "Lab catalog", hint: "LOINC orderables + billing codes" },
   { value: "imaging-catalog", label: "Imaging catalog", hint: "Imaging orderables + billing codes" },
+  {
+    value: "payer-contracts",
+    label: "Payer contracts",
+    hint: "Contract headers (payor, schedule, discounts, uncontracted behavior)",
+  },
+  {
+    value: "packages",
+    label: "Packages",
+    hint: "Package definitions (LOS, included types, beyond-LOS policy)",
+  },
+  {
+    value: "payer-code-maps",
+    label: "Payer code maps",
+    hint: "Payer terminology → hospital billing codes",
+  },
 ];
 
 function fileToBase64(file: File): Promise<string> {
@@ -27,11 +66,23 @@ function fileToBase64(file: File): Promise<string> {
   });
 }
 
+function downloadTemplate(kind: MasterKind) {
+  const blob = new Blob([CSV_TEMPLATES[kind]], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `${kind}-template.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function MastersUploadPage() {
   const { session } = useAuth();
-  const canWrite = hasPermission(session, "billing:write");
+  const canWrite =
+    hasPermission(session, "billing:write") || hasPermission(session, "tariff:write");
   const [kind, setKind] = useState<MasterKind>("billing-items");
-  const [hospitalId, setHospitalId] = useState(session?.hospital_id ?? "atrius-gurugram");
+  const [hospitals, setHospitals] = useState<HospitalSummary[]>([]);
+  const [hospitalId, setHospitalId] = useState(session?.hospital_id ?? "");
   const [scheduleId, setScheduleId] = useState("soc-cash-op");
   const [file, setFile] = useState<File | null>(null);
   const [csvText, setCsvText] = useState("");
@@ -41,6 +92,25 @@ export default function MastersUploadPage() {
   const [committed, setCommitted] = useState<MasterUploadResponse | null>(null);
 
   const kindMeta = useMemo(() => KINDS.find((k) => k.value === kind), [kind]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void listHospitals()
+      .then((res) => {
+        if (cancelled) return;
+        setHospitals(res.hospitals ?? []);
+        setHospitalId((prev) => {
+          if (prev) return prev;
+          return session?.hospital_id ?? res.hospitals?.[0]?.id ?? "";
+        });
+      })
+      .catch(() => {
+        /* keep free-text fallback via session hospital */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.hospital_id]);
 
   async function runUpload(dryRun: boolean) {
     if (!canWrite) return;
@@ -78,7 +148,7 @@ export default function MastersUploadPage() {
       if (dryRun) setPreview(res);
       else setCommitted(res);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(formatApiError(e));
     } finally {
       setBusy(false);
     }
@@ -91,7 +161,7 @@ export default function MastersUploadPage() {
     >
       {error ? <p className="error">{error}</p> : null}
       {!canWrite ? (
-        <p className="muted">Need billing:write to upload masters.</p>
+        <p className="muted">Need billing:write or tariff:write to upload masters.</p>
       ) : null}
 
       <section className="panel">
@@ -112,15 +182,38 @@ export default function MastersUploadPage() {
             </select>
           </label>
           <p className="muted" style={{ alignSelf: "end" }}>
-            {kindMeta?.hint}
+            {kindMeta?.hint}{" "}
+            <button
+              type="button"
+              className="ghost"
+              disabled={!canWrite}
+              onClick={() => downloadTemplate(kind)}
+            >
+              Download CSV template
+            </button>
           </p>
           <label>
-            Hospital ID
-            <input
-              value={hospitalId}
-              onChange={(e) => setHospitalId(e.target.value)}
-              disabled={!canWrite}
-            />
+            Hospital
+            {hospitals.length > 0 ? (
+              <select
+                value={hospitalId}
+                onChange={(e) => setHospitalId(e.target.value)}
+                disabled={!canWrite}
+              >
+                {hospitals.map((h) => (
+                  <option key={h.id} value={h.id}>
+                    {h.name ?? h.id}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                value={hospitalId}
+                onChange={(e) => setHospitalId(e.target.value)}
+                disabled={!canWrite}
+                placeholder="atrius-gurugram"
+              />
+            )}
           </label>
           <label>
             Schedule ID (SOC / items)
@@ -160,7 +253,7 @@ export default function MastersUploadPage() {
               setPreview(null);
               setCommitted(null);
             }}
-            placeholder="code,title,..."
+            placeholder={CSV_TEMPLATES[kind].trim()}
           />
         </label>
         <div className="row">
@@ -196,21 +289,47 @@ export default function MastersUploadPage() {
             {preview.dry_run ? " (dry-run)" : ""}
           </p>
           {preview.errors.length > 0 ? (
-            <ul className="admit-match-list">
-              {preview.errors.map((err) => (
-                <li key={`${err.row}-${err.message}`}>
-                  Row {err.row}: {err.message}
-                </li>
-              ))}
-            </ul>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Row</th>
+                  <th>Error</th>
+                </tr>
+              </thead>
+              <tbody>
+                {preview.errors.map((err) => (
+                  <tr key={`${err.row}-${err.message}`}>
+                    <td>{err.row}</td>
+                    <td>{err.message}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           ) : (
             <p className="success">No row errors — safe to commit.</p>
           )}
           {preview.resource_ids.length > 0 ? (
-            <p className="muted">
-              Sample ids: {preview.resource_ids.slice(0, 8).join(", ")}
-              {preview.resource_ids.length > 8 ? "…" : ""}
-            </p>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Would write / sample id</th>
+                </tr>
+              </thead>
+              <tbody>
+                {preview.resource_ids.slice(0, 20).map((id, i) => (
+                  <tr key={id}>
+                    <td>{i + 1}</td>
+                    <td>
+                      <code>{id}</code>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : null}
+          {preview.resource_ids.length > 20 ? (
+            <p className="muted">…and {preview.resource_ids.length - 20} more</p>
           ) : null}
         </section>
       ) : null}

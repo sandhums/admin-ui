@@ -10,6 +10,7 @@ import {
 import { hasPermission } from "../components/RequirePermission";
 import AdminLayout from "../components/AdminLayout";
 import { useAuth } from "../context/AuthContext";
+import { formatApiError } from "../api/bff";
 
 export default function AdminConfigPage() {
   const { session } = useAuth();
@@ -47,7 +48,7 @@ export default function AdminConfigPage() {
       })
       .catch((err) => {
         if (!cancelled) {
-          setError(err instanceof Error ? err.message : String(err));
+          setError(formatApiError(err));
           setHospitals([]);
         }
       })
@@ -78,7 +79,7 @@ export default function AdminConfigPage() {
       setLoadedHospitalId(hospitalId);
       setOrgName(data.organization.name);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(formatApiError(e));
       setConfig(null);
       setLoadedHospitalId(null);
     } finally {
@@ -104,7 +105,7 @@ export default function AdminConfigPage() {
         prev ? { ...prev, organization: { ...prev.organization, name: updated.name } } : prev,
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(formatApiError(err));
     } finally {
       setSaving(false);
     }

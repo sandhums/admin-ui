@@ -18,12 +18,21 @@ import AdminLayout from "../components/AdminLayout";
 import { hasPermission } from "../components/RequirePermission";
 import { hospitalGstState } from "../constants";
 import { useAuth } from "../context/AuthContext";
+import { handleApiError, staffStepUpUrl } from "../api/bff";
+
+function setApiError(setError: (msg: string | null) => void, err: unknown) {
+  const msg = handleApiError(err, {
+    spa: "admin",
+    stepUpUrl: (returnTo) => staffStepUpUrl("admin", returnTo),
+  });
+  if (msg) setError(msg);
+}
+
 
 export default function ClaimsDeskPage() {
   const { session } = useAuth();
   const canWrite = hasPermission(session, "billing:write");
-  const canSubmitClaims =
-    hasPermission(session, "claims:submit") || canWrite;
+  const canSubmitClaims = hasPermission(session, "claims:submit");
   const [searchParams] = useSearchParams();
 
   const [patientId, setPatientId] = useState(() => searchParams.get("patientId") ?? "");
@@ -34,8 +43,11 @@ export default function ClaimsDeskPage() {
   const [hospitalState, setHospitalState] = useState(hospitalGstState(session?.hospital_id));
   const [placeOfSupply, setPlaceOfSupply] = useState(hospitalGstState(session?.hospital_id));
   const [payorOrgId, setPayorOrgId] = useState("org-demo-insurer");
+  const [payerType, setPayerType] = useState("insurer");
   const [subscriberId, setSubscriberId] = useState("");
   const [coverageId, setCoverageId] = useState("");
+  const [packageCode, setPackageCode] = useState("");
+  const [authorizedLosDays, setAuthorizedLosDays] = useState("");
   const [claimId, setClaimId] = useState("");
 
   const [coverages, setCoverages] = useState<CoverageSummary[]>([]);
@@ -44,8 +56,13 @@ export default function ClaimsDeskPage() {
   const [lastClaim, setLastClaim] = useState<ClaimSummary | null>(null);
   const [exportPreview, setExportPreview] = useState<string | null>(null);
   const [claimResponseJson, setClaimResponseJson] = useState(
-    '{\n  "outcome": "complete",\n  "status": "active"\n}',
+    '{\n  "resourceType": "ClaimResponse",\n  "outcome": "complete",\n  "status": "active"\n}',
   );
+  const [crOutcome, setCrOutcome] = useState("complete");
+  const [crStatus, setCrStatus] = useState("active");
+  const [crDisposition, setCrDisposition] = useState("");
+  const [crPaymentAmount, setCrPaymentAmount] = useState("");
+  const [crAdvancedJson, setCrAdvancedJson] = useState(false);
   const [lastClaimResponse, setLastClaimResponse] = useState<Record<
     string,
     unknown
@@ -78,7 +95,7 @@ export default function ClaimsDeskPage() {
         setCoverageId(list[0].id);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setApiError(setError, e);
       setCoverages([]);
     } finally {
       setBusy(false);
@@ -98,7 +115,7 @@ export default function ClaimsDeskPage() {
         setPatientId(fromCharge);
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setApiError(setError, e);
       setCharges([]);
     } finally {
       setBusy(false);
@@ -127,13 +144,14 @@ export default function ClaimsDeskPage() {
         patient_id: patientId.trim(),
         payor_organization_id: payorOrgId.trim(),
         subscriber_id: subscriberId.trim() || undefined,
-        payer_type_display: "private",
+        payer_type_display: payerType,
+        hospital_id: hospitalId.trim() || undefined,
       });
       setCoverageId(cov.id);
       setMessage(`Attached coverage ${cov.id}`);
       await loadCoverages();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setApiError(setError, e);
     } finally {
       setBusy(false);
     }
@@ -149,15 +167,19 @@ export default function ClaimsDeskPage() {
     setError(null);
     setMessage(null);
     try {
+      const los = authorizedLosDays.trim() !== "" ? Number(authorizedLosDays) : undefined;
       const res = await requestEligibility({
         patient_id: patientId.trim(),
         hospital_id: hospitalId.trim(),
         coverage_id: coverageId.trim(),
         insurer_organization_id: payorOrgId.trim(),
+        package_code: packageCode.trim() || undefined,
+        authorized_los_days:
+          los != null && Number.isFinite(los) && los > 0 ? Math.floor(los) : undefined,
       });
       setMessage(`Eligibility ${res.status} (request ${res.request_id})`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setApiError(setError, e);
     } finally {
       setBusy(false);
     }
@@ -192,7 +214,7 @@ export default function ClaimsDeskPage() {
       );
       await loadCharges();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setApiError(setError, e);
     } finally {
       setBusy(false);
     }
@@ -212,7 +234,7 @@ export default function ClaimsDeskPage() {
       setExportPreview(JSON.stringify(bundle, null, 2));
       setMessage(`Exported ClaimBundle for ${id}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setApiError(setError, e);
       setExportPreview(null);
     } finally {
       setBusy(false);
@@ -227,11 +249,26 @@ export default function ClaimsDeskPage() {
       return;
     }
     let body: Record<string, unknown>;
-    try {
-      body = JSON.parse(claimResponseJson) as Record<string, unknown>;
-    } catch {
-      setError("ClaimResponse JSON is invalid");
-      return;
+    if (crAdvancedJson) {
+      try {
+        body = JSON.parse(claimResponseJson) as Record<string, unknown>;
+      } catch {
+        setError("ClaimResponse JSON is invalid");
+        return;
+      }
+    } else {
+      body = {
+        resourceType: "ClaimResponse",
+        status: crStatus,
+        outcome: crOutcome,
+      };
+      if (crDisposition.trim()) body.disposition = crDisposition.trim();
+      const amt = Number(crPaymentAmount);
+      if (crPaymentAmount.trim() && Number.isFinite(amt)) {
+        body.payment = {
+          amount: { value: amt, currency: "INR" },
+        };
+      }
     }
     setBusy(true);
     setError(null);
@@ -243,7 +280,7 @@ export default function ClaimsDeskPage() {
         `Ingested ClaimResponse ${String(res.id ?? "?")} for claim ${id} · outcome ${String(res.outcome ?? "—")}`,
       );
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setApiError(setError, e);
     } finally {
       setBusy(false);
     }
@@ -265,7 +302,7 @@ export default function ClaimsDeskPage() {
       setLastClaim(claim);
       setMessage(`Cancelled claim ${claim.id} (${claim.status})`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setApiError(setError, e);
     } finally {
       setBusy(false);
     }
@@ -280,7 +317,7 @@ export default function ClaimsDeskPage() {
       setLastClaim(claim);
       setMessage(`Loaded claim ${claim.id} · ${claim.status}`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setApiError(setError, e);
     } finally {
       setBusy(false);
     }
@@ -367,6 +404,19 @@ export default function ClaimsDeskPage() {
               placeholder="org-demo-insurer"
             />
           </label>
+          <label>
+            Payer type
+            <select
+              value={payerType}
+              onChange={(e) => setPayerType(e.target.value)}
+              disabled={!canWrite}
+            >
+              <option value="govt-scheme">govt-scheme</option>
+              <option value="insurer">insurer</option>
+              <option value="tpa">tpa</option>
+              <option value="corporate">corporate</option>
+            </select>
+          </label>
         </div>
         <div className="row" style={{ marginTop: "0.75rem" }}>
           <button
@@ -388,15 +438,37 @@ export default function ClaimsDeskPage() {
 
       <section className="panel">
         <h2>Coverage</h2>
-        <label>
-          Subscriber id (optional)
-          <input
-            value={subscriberId}
-            onChange={(e) => setSubscriberId(e.target.value)}
-            placeholder="policy / member number"
-            disabled={!canWrite}
-          />
-        </label>
+        <div className="form grid-2">
+          <label>
+            Subscriber id (optional)
+            <input
+              value={subscriberId}
+              onChange={(e) => setSubscriberId(e.target.value)}
+              placeholder="policy / member number"
+              disabled={!canWrite}
+            />
+          </label>
+          <label>
+            Package code (eligibility, optional)
+            <input
+              value={packageCode}
+              onChange={(e) => setPackageCode(e.target.value)}
+              placeholder="PKG-…"
+              disabled={!canWrite}
+            />
+          </label>
+          <label>
+            Authorized LOS days (optional)
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={authorizedLosDays}
+              onChange={(e) => setAuthorizedLosDays(e.target.value)}
+              disabled={!canWrite}
+            />
+          </label>
+        </div>
         <div className="row">
           <button type="button" disabled={busy || !canWrite} onClick={() => void onAttachCoverage()}>
             Attach coverage
@@ -532,17 +604,76 @@ export default function ClaimsDeskPage() {
       <section className="panel">
         <h2>ClaimResponse ingest</h2>
         <p className="muted">
-          Paste insurer / ABDM ClaimResponse JSON (id optional). Requires claims:submit.
+          Record insurer / ABDM ClaimResponse against a claim. Requires claims:submit.
         </p>
-        <label>
-          ClaimResponse JSON
-          <textarea
-            rows={8}
-            value={claimResponseJson}
-            onChange={(e) => setClaimResponseJson(e.target.value)}
+        <div className="form grid-2">
+          <label>
+            Outcome
+            <select
+              value={crOutcome}
+              onChange={(e) => setCrOutcome(e.target.value)}
+              disabled={!canSubmitClaims || busy || crAdvancedJson}
+            >
+              <option value="queued">queued</option>
+              <option value="complete">complete</option>
+              <option value="error">error</option>
+              <option value="partial">partial</option>
+            </select>
+          </label>
+          <label>
+            Status
+            <select
+              value={crStatus}
+              onChange={(e) => setCrStatus(e.target.value)}
+              disabled={!canSubmitClaims || busy || crAdvancedJson}
+            >
+              <option value="active">active</option>
+              <option value="cancelled">cancelled</option>
+              <option value="draft">draft</option>
+              <option value="entered-in-error">entered-in-error</option>
+            </select>
+          </label>
+          <label>
+            Disposition (optional)
+            <input
+              value={crDisposition}
+              onChange={(e) => setCrDisposition(e.target.value)}
+              disabled={!canSubmitClaims || busy || crAdvancedJson}
+              placeholder="Approved / denied reason"
+            />
+          </label>
+          <label>
+            Payment amount INR (optional)
+            <input
+              type="number"
+              min={0}
+              step={0.01}
+              value={crPaymentAmount}
+              onChange={(e) => setCrPaymentAmount(e.target.value)}
+              disabled={!canSubmitClaims || busy || crAdvancedJson}
+            />
+          </label>
+        </div>
+        <label className="row">
+          <input
+            type="checkbox"
+            checked={crAdvancedJson}
+            onChange={(e) => setCrAdvancedJson(e.target.checked)}
             disabled={!canSubmitClaims || busy}
           />
+          <span>Advanced: paste full ClaimResponse JSON</span>
         </label>
+        {crAdvancedJson ? (
+          <label>
+            ClaimResponse JSON
+            <textarea
+              rows={8}
+              value={claimResponseJson}
+              onChange={(e) => setClaimResponseJson(e.target.value)}
+              disabled={!canSubmitClaims || busy}
+            />
+          </label>
+        ) : null}
         <button
           type="button"
           disabled={busy || !canSubmitClaims}

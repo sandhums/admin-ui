@@ -1,6 +1,6 @@
 import type { FormEvent } from "react";
 import { useCallback, useEffect, useState } from "react";
-import { BffError } from "../api/bff";
+import {BffError, formatApiError} from "../api/bff";
 import {
   bookAppointment,
   cancelAppointment,
@@ -8,10 +8,12 @@ import {
   findSlots,
   getRegistrationChoices,
   listBookingDoctors,
+  listPatients,
   lookupPatientAppointment,
   registerPatient,
   rescheduleAppointment,
   type DuplicateMatch,
+  type PatientSummary,
   type RegistrationChoicesResponse,
   type SlotSummary,
 } from "../api/his";
@@ -75,13 +77,22 @@ export default function OpdWorkflowPage() {
   const [appointmentId, setAppointmentId] = useState<string | null>(null);
   const [rescheduleMode, setRescheduleMode] = useState(false);
   const [cancelReason, setCancelReason] = useState("Patient requested cancellation");
+  const [recentPatients, setRecentPatients] = useState<PatientSummary[]>([]);
+  const [patientsLoading, setPatientsLoading] = useState(false);
+  const [patientFilter, setPatientFilter] = useState("");
 
   const [stepStatus, setStepStatus] = useState<Record<number, string | null>>({});
   const [stepError, setStepError] = useState<Record<number, string | null>>({});
   const [busy, setBusy] = useState(false);
   const [resumeChecked, setResumeChecked] = useState(false);
 
-  const patientLabel = patientId ? `${givenName} ${familyName}` : null;
+  const patientLabel = (() => {
+    if (!patientId) return null;
+    const fromList = recentPatients.find((p) => p.patient_id === patientId)?.name;
+    if (fromList) return fromList;
+    const fromForm = `${givenName} ${familyName}`.trim();
+    return fromForm || patientId;
+  })();
   const selectedDoctor =
     doctors.find((d) => d.practitioner_id === selectedPractitionerId) ?? doctors[0] ?? null;
 
@@ -109,6 +120,25 @@ export default function OpdWorkflowPage() {
       }
     })();
   }, [session?.hospital_id]);
+
+  const loadRecentPatients = useCallback(async (name?: string) => {
+    setPatientsLoading(true);
+    try {
+      const res = await listPatients({
+        name: name?.trim() || undefined,
+        _count: 50,
+      });
+      setRecentPatients(res.patients);
+    } catch {
+      setRecentPatients([]);
+    } finally {
+      setPatientsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadRecentPatients();
+  }, [loadRecentPatients]);
 
   useEffect(() => {
     void (async () => {
@@ -251,7 +281,7 @@ export default function OpdWorkflowPage() {
     } catch (err) {
       setStepError((prev) => ({
         ...prev,
-        2: err instanceof Error ? err.message : String(err),
+        2: formatApiError(err),
       }));
       setStepStatus((prev) => ({ ...prev, 2: null }));
     } finally {
@@ -274,7 +304,7 @@ export default function OpdWorkflowPage() {
     } catch (err) {
       setStepError((prev) => ({
         ...prev,
-        [step]: err instanceof Error ? err.message : String(err),
+        [step]: formatApiError(err),
       }));
       throw err;
     } finally {
@@ -323,13 +353,14 @@ export default function OpdWorkflowPage() {
         ...prev,
         1: `Registered ${givenName} ${familyName} · MRN ${res.mrn}`,
       }));
+      void loadRecentPatients();
     } catch (err) {
       if (err instanceof BffError && err.isDuplicatePatient && err.body.duplicates) {
         setDuplicateMatches(err.body.duplicates);
       }
       setStepError((prev) => ({
         ...prev,
-        1: err instanceof Error ? err.message : String(err),
+        1: formatApiError(err),
       }));
       setStepStatus((prev) => ({ ...prev, 1: null }));
     } finally {
@@ -354,15 +385,50 @@ export default function OpdWorkflowPage() {
         ...prev,
         1: `Registered ${givenName} ${familyName} · MRN ${res.mrn}`,
       }));
+      void loadRecentPatients();
     } catch (err) {
       setStepError((prev) => ({
         ...prev,
-        1: err instanceof Error ? err.message : String(err),
+        1: formatApiError(err),
       }));
       setStepStatus((prev) => ({ ...prev, 1: null }));
     } finally {
       setBusy(false);
     }
+  }
+
+  function onPickPatient(nextId: string) {
+    if (!nextId) {
+      setPatientId(null);
+      setMrn(null);
+      setAppointmentId(null);
+      setBookedSlotLabel(null);
+      setStepStatus((prev) => ({ ...prev, 1: null, 2: null }));
+      return;
+    }
+    const selected = recentPatients.find((p) => p.patient_id === nextId);
+    setPatientId(nextId);
+    setMrn(selected?.mrn ?? null);
+    setAppointmentId(null);
+    setBookedSlotLabel(null);
+    setRescheduleMode(false);
+    setSelectedSlotId(null);
+    if (selected?.name) {
+      const parts = selected.name.trim().split(/\s+/);
+      if (parts.length >= 2) {
+        setGivenName(parts.slice(0, -1).join(" "));
+        setFamilyName(parts[parts.length - 1] ?? "");
+      } else if (parts.length === 1) {
+        setGivenName(parts[0] ?? "");
+      }
+    }
+    setStepStatus((prev) => ({
+      ...prev,
+      1: `Selected ${selected?.name ?? nextId}${selected?.mrn ? ` · MRN ${selected.mrn}` : ""}`,
+      2: null,
+    }));
+    setStepError((prev) => ({ ...prev, 1: null, 2: null }));
+    void syncBookedAppointment(nextId, appointmentDate, selectedPractitionerId, selectedDoctor?.name);
   }
 
   function onAppointmentDateChange(date: string) {
@@ -393,7 +459,7 @@ export default function OpdWorkflowPage() {
 
   async function onBook() {
     if (!patientId) {
-      setStepError((prev) => ({ ...prev, 2: "Register the patient first" }));
+      setStepError((prev) => ({ ...prev, 2: "Select or register a patient first" }));
       return;
     }
     if (!selectedDoctor) {
@@ -643,11 +709,74 @@ export default function OpdWorkflowPage() {
         ) : null}
         {stepStatus[1] ? <p className="success">{stepStatus[1]}</p> : null}
         {stepError[1] ? <p className="error">{stepError[1]}</p> : null}
-        {!patientId ? <p className="muted">Complete registration before booking.</p> : null}
+        {!patientId ? (
+          <p className="muted">Register a new patient above, or pick an existing one in step 2.</p>
+        ) : null}
       </section>
 
       <section className={`card${appointmentId ? " step-done" : ""}`}>
         <h2>2. Book appointment</h2>
+
+        <div className="form" style={{ marginBottom: "1rem" }}>
+          <label>
+            Patient
+            <select
+              value={patientId ?? ""}
+              onChange={(e) => onPickPatient(e.target.value)}
+              disabled={busy || patientsLoading || Boolean(appointmentId && !rescheduleMode)}
+            >
+              <option value="">
+                {patientsLoading ? "Loading patients…" : "Select an existing patient…"}
+              </option>
+              {recentPatients.map((patient) => (
+                <option key={patient.patient_id} value={patient.patient_id}>
+                  {patient.name ?? patient.patient_id}
+                  {patient.mrn ? ` · ${patient.mrn}` : ""}
+                  {patient.birth_date ? ` · ${patient.birth_date}` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="row">
+            <label style={{ flex: 1 }}>
+              Filter by name
+              <input
+                value={patientFilter}
+                placeholder="e.g. Patel"
+                disabled={busy || patientsLoading}
+                onChange={(e) => setPatientFilter(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void loadRecentPatients(patientFilter);
+                  }
+                }}
+              />
+            </label>
+            <button
+              type="button"
+              className="secondary"
+              disabled={busy || patientsLoading}
+              onClick={() => void loadRecentPatients(patientFilter)}
+            >
+              {patientsLoading ? "Searching…" : "Search"}
+            </button>
+            <button
+              type="button"
+              className="secondary"
+              disabled={busy || patientsLoading}
+              onClick={() => {
+                setPatientFilter("");
+                void loadRecentPatients();
+              }}
+            >
+              Recent
+            </button>
+          </div>
+          {!patientId ? (
+            <p className="muted">Pick a patient to load slots, or register one in step 1.</p>
+          ) : null}
+        </div>
 
         {appointmentId && !rescheduleMode ? (
           <div className="booking-summary">

@@ -7,15 +7,12 @@ import {
   type AdminPermissionSummary,
   type AdminRoleSummary,
 } from "../api/authz";
-import { BffError } from "../api/bff";
+import { formatApiError } from "../api/bff";
 import AdminLayout from "../components/AdminLayout";
 import { useAuth } from "../context/AuthContext";
 
 function formatLoadError(err: unknown): string {
-  if (err instanceof BffError) {
-    return err.message;
-  }
-  return err instanceof Error ? err.message : String(err);
+  return formatApiError(err);
 }
 
 export default function AdminRolesPage() {

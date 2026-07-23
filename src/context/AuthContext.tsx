@@ -7,7 +7,12 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { getSession, logout, type SessionInfo } from "../api/bff";
+import {
+  AUTH_REQUIRED_EVENT,
+  getSession,
+  logout,
+  type SessionInfo,
+} from "../api/bff";
 
 type AuthContextValue = {
   session: SessionInfo | null;
@@ -36,6 +41,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    const onAuthRequired = () => {
+      setSession(null);
+      const path = window.location.pathname;
+      if (path.startsWith("/login") || path.startsWith("/auth/")) return;
+      const returnTo = `${path}${window.location.search}`;
+      // Keep path + query so desks like /billing?encounterId=… survive re-login.
+      const params = new URLSearchParams({
+        expired: "1",
+        from: returnTo,
+      });
+      window.location.assign(`/login?${params}`);
+    };
+    window.addEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
+    return () => window.removeEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
+  }, []);
 
   const signOut = useCallback(async () => {
     try {

@@ -11,6 +11,7 @@ import AuthErrorPage from "./pages/AuthErrorPage";
 import OpdWorkflowPage from "./pages/OpdWorkflowPage";
 import OpsCensusPage from "./pages/OpsCensusPage";
 import MastersUploadPage from "./pages/MastersUploadPage";
+import PayerContractsPage from "./pages/PayerContractsPage";
 import SchedulingBoardPage from "./pages/SchedulingBoardPage";
 import RequireAuth from "./components/RequireAuth";
 import RequirePermission from "./components/RequirePermission";
@@ -74,10 +75,20 @@ export default function App() {
             }
           />
           <Route
+            path="/admin/payer-contracts"
+            element={
+              <RequireAuth>
+                <RequirePermission permission="billing:read">
+                  <PayerContractsPage />
+                </RequirePermission>
+              </RequireAuth>
+            }
+          />
+          <Route
             path="/admin/masters"
             element={
               <RequireAuth>
-                <RequirePermission permission="billing:write">
+                <RequirePermission anyOf={["billing:write", "tariff:write"]}>
                   <MastersUploadPage />
                 </RequirePermission>
               </RequireAuth>

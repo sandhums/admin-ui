@@ -10,7 +10,7 @@ import {
   type AdminUserSummary,
   type AdminHospitalSummary,
 } from "../api/authz";
-import { BffError } from "../api/bff";
+import { formatApiError } from "../api/bff";
 import AdminLayout from "../components/AdminLayout";
 import { useAuth } from "../context/AuthContext";
 
@@ -49,10 +49,7 @@ function hospitalsFromUserRoles(users: AdminUserSummary[]): AdminHospitalSummary
 }
 
 function formatLoadError(err: unknown): string {
-  if (err instanceof BffError) {
-    return err.message;
-  }
-  return err instanceof Error ? err.message : String(err);
+  return formatApiError(err);
 }
 
 function summarizeUserRoles(user: AdminUserSummary) {
@@ -219,7 +216,7 @@ export default function AdminUsersPage() {
       setFeedback(result.message);
       await refresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(formatApiError(err));
     } finally {
       setSaving(false);
     }

@@ -401,7 +401,25 @@ export type PatientSummary = {
   patient_id: string;
   mrn?: string;
   name?: string;
+  birth_date?: string;
+  gender?: string;
 };
+
+export type ListPatientsResponse = {
+  count: number;
+  patients: PatientSummary[];
+};
+
+export async function listPatients(params?: {
+  name?: string;
+  _count?: number;
+}): Promise<ListPatientsResponse> {
+  const qs = new URLSearchParams();
+  if (params?.name?.trim()) qs.set("name", params.name.trim());
+  if (params?._count != null) qs.set("_count", String(params._count));
+  const suffix = qs.size > 0 ? `?${qs.toString()}` : "";
+  return hisFetch(`patients${suffix}`);
+}
 
 function patientDisplayName(resource: {
   name?: { text?: string; family?: string; given?: string[] }[];
@@ -516,6 +534,12 @@ export type ChargeSummary = {
   department_id?: string;
   unit_price_inr?: number;
   quantity?: number;
+  occurrence_datetime?: string;
+  tariff_source?: string;
+  liability?: string;
+  claimable_amount_inr?: number;
+  contract_id?: string;
+  package_case_id?: string;
 };
 
 export type ListChargesResponse = {
@@ -552,6 +576,10 @@ export type InvoiceSummary = {
   total_net_inr?: number;
   total_gross_inr?: number;
   patient_id?: string;
+  /** Statutory series, e.g. INV-GGN/2026-27/000001 */
+  invoice_number?: string;
+  hospital_gstin?: string;
+  payment_notice_id?: string;
 };
 
 export type IssueInvoiceResponse = {
@@ -629,6 +657,8 @@ export type CoverageSummary = {
   patient_id?: string;
   payor_organization_id?: string;
   subscriber_id?: string;
+  contract_id?: string;
+  payer_type_display?: string;
 };
 
 export type AttachCoverageRequest = {
@@ -637,6 +667,8 @@ export type AttachCoverageRequest = {
   subscriber_id?: string;
   payer_type_display?: string;
   id?: string;
+  hospital_id?: string;
+  contract_id?: string;
 };
 
 export type ClaimSummary = {
@@ -665,6 +697,8 @@ export type EligibilityRequest = {
   hospital_id: string;
   coverage_id: string;
   insurer_organization_id: string;
+  package_code?: string;
+  authorized_los_days?: number;
 };
 
 export type EligibilityResponse = {
@@ -726,7 +760,233 @@ export type MasterKind =
   | "payors"
   | "vendors"
   | "lab-catalog"
-  | "imaging-catalog";
+  | "imaging-catalog"
+  | "payer-contracts"
+  | "packages"
+  | "payer-code-maps";
+
+// --- Payer contracts / packages / pricing ---
+
+export type PayerContractSummary = {
+  id: string;
+  title: string;
+  hospital_id?: string;
+  payor_org_id?: string;
+  tpa_org_id?: string;
+  category?: string;
+  schedule_id?: string;
+  cash_schedule_id?: string;
+  effective_start?: string;
+  effective_end?: string;
+  version?: string;
+  default_discount_percent: number;
+  item_type_discounts?: { item_type: string; discount_percent: number }[];
+  uncontracted_behavior: string;
+  eligible_bed_category?: string;
+  room_rent_cap_inr?: number;
+  status?: string;
+};
+
+export type PayerContractListResponse = {
+  contracts: PayerContractSummary[];
+};
+
+export type PayerContractUpsertRequest = {
+  id?: string;
+  title: string;
+  hospital_id: string;
+  payor_org_id: string;
+  tpa_org_id?: string;
+  category?: string;
+  schedule_id: string;
+  cash_schedule_id?: string;
+  effective_from?: string;
+  effective_to?: string;
+  version?: string;
+  supersedes_contract_id?: string;
+  default_discount_percent?: number;
+  item_type_discounts?: { item_type: string; discount_percent: number }[];
+  uncontracted_behavior?: string;
+  eligible_bed_category?: string;
+  room_rent_cap_inr?: number;
+};
+
+export type PackageDefinitionSummary = {
+  id: string;
+  package_code: string;
+  title: string;
+  schedule_id?: string;
+  payer_org_id?: string;
+  bed_category?: string;
+  package_amount_inr: number;
+  included_los_days: number;
+  included_item_types: string[];
+  excluded_codes: string[];
+  beyond_los_policy: string;
+  per_day_rate_inr?: number;
+  hsn_sac?: string;
+  gst_rate_class?: string;
+};
+
+export type PackageListResponse = {
+  packages: PackageDefinitionSummary[];
+};
+
+export type PackageUpsertRequest = {
+  id?: string;
+  package_code: string;
+  title: string;
+  schedule_id: string;
+  payer_org_id?: string;
+  bed_category?: string;
+  package_amount_inr: number;
+  included_los_days: number;
+  included_item_types?: string[];
+  excluded_codes?: string[];
+  beyond_los_policy?: string;
+  per_day_rate_inr?: number;
+  hsn_sac?: string;
+  gst_rate_class?: string;
+  hospital_id?: string;
+  effective_from?: string;
+  effective_to?: string;
+};
+
+export type PackageCaseSummary = {
+  id: string;
+  encounter_id?: string;
+  patient_id?: string;
+  hospital_id?: string;
+  package_code?: string;
+  package_definition_id?: string;
+  bed_category?: string;
+  authorized_los_days: number;
+  preauth_number?: string;
+  contract_id?: string;
+  coverage_id?: string;
+  start_date?: string;
+  status?: string;
+};
+
+export type OpenPackageCaseRequest = {
+  encounter_id: string;
+  hospital_id: string;
+  package_code: string;
+  package_definition_id?: string;
+  bed_category?: string;
+  authorized_los_days?: number;
+  preauth_number?: string;
+  contract_id?: string;
+  coverage_id?: string;
+  start_date?: string;
+  id?: string;
+  post_package_charge?: boolean;
+};
+
+export type PackageCaseResponse = {
+  package_case: PackageCaseSummary;
+  package_charge_id?: string;
+};
+
+export type PricingQuoteParams = {
+  billing_code: string;
+  encounter_id?: string;
+  hospital_id?: string;
+  schedule_id?: string;
+  payer_org_id?: string;
+  bed_category?: string;
+  visit_class?: string;
+  item_type?: string;
+  los_day_index?: number;
+};
+
+export type PricingQuoteResponse = {
+  billing_code: string;
+  unit_price_inr: number;
+  claimable_amount_inr: number;
+  schedule_id?: string;
+  gst_rate_class: string;
+  hsn_sac?: string;
+  definition_id?: string;
+  title: string;
+  item_type?: string;
+  source: string;
+  liability: string;
+  contract_id?: string;
+  discount_percent?: number;
+  package_case_id?: string;
+  notional_unit_price_inr?: number;
+};
+
+export async function listPayerContracts(params?: {
+  hospital_id?: string;
+  payor_org_id?: string;
+}): Promise<PayerContractListResponse> {
+  const qs = new URLSearchParams();
+  if (params?.hospital_id) qs.set("hospital_id", params.hospital_id);
+  if (params?.payor_org_id) qs.set("payor_org_id", params.payor_org_id);
+  const suffix = qs.size > 0 ? `?${qs.toString()}` : "";
+  return hisFetch(`payer-contracts${suffix}`);
+}
+
+export async function getPayerContract(id: string): Promise<PayerContractSummary> {
+  return hisFetch(`payer-contracts/${encodeURIComponent(id)}`);
+}
+
+export async function upsertPayerContract(
+  body: PayerContractUpsertRequest,
+): Promise<PayerContractSummary> {
+  return hisFetch("payer-contracts", { method: "POST", body: JSON.stringify(body) });
+}
+
+export async function listPackages(params?: {
+  schedule_id?: string;
+  payer_org_id?: string;
+}): Promise<PackageListResponse> {
+  const qs = new URLSearchParams();
+  if (params?.schedule_id) qs.set("schedule_id", params.schedule_id);
+  if (params?.payer_org_id) qs.set("payer_org_id", params.payer_org_id);
+  const suffix = qs.size > 0 ? `?${qs.toString()}` : "";
+  return hisFetch(`packages${suffix}`);
+}
+
+export async function getPackage(id: string): Promise<PackageDefinitionSummary> {
+  return hisFetch(`packages/${encodeURIComponent(id)}`);
+}
+
+export async function upsertPackage(body: PackageUpsertRequest): Promise<PackageDefinitionSummary> {
+  return hisFetch("packages", { method: "POST", body: JSON.stringify(body) });
+}
+
+export async function getPackageCase(
+  encounterId: string,
+): Promise<PackageCaseSummary | null> {
+  return hisFetch(`encounters/${encodeURIComponent(encounterId)}/package-case`);
+}
+
+export async function openPackageCase(
+  encounterId: string,
+  body: OpenPackageCaseRequest,
+): Promise<PackageCaseResponse> {
+  return hisFetch(`encounters/${encodeURIComponent(encounterId)}/package-case`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function quotePrice(params: PricingQuoteParams): Promise<PricingQuoteResponse> {
+  const qs = new URLSearchParams();
+  qs.set("billing_code", params.billing_code);
+  if (params.encounter_id) qs.set("encounter_id", params.encounter_id);
+  if (params.hospital_id) qs.set("hospital_id", params.hospital_id);
+  if (params.schedule_id) qs.set("schedule_id", params.schedule_id);
+  if (params.payer_org_id) qs.set("payer_org_id", params.payer_org_id);
+  if (params.bed_category) qs.set("bed_category", params.bed_category);
+  if (params.visit_class) qs.set("visit_class", params.visit_class);
+  if (params.item_type) qs.set("item_type", params.item_type);
+  if (params.los_day_index != null) qs.set("los_day_index", String(params.los_day_index));
+  return hisFetch(`pricing/quote?${qs.toString()}`);
+}
 
 export type MasterUploadRequest = {
   kind: MasterKind;

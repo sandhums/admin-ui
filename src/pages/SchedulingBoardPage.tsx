@@ -14,8 +14,10 @@ import {
 import AdminLayout from "../components/AdminLayout";
 import { hasPermission } from "../components/RequirePermission";
 import { useAuth } from "../context/AuthContext";
+import { formatApiError } from "../api/bff";
 import {
   DEFAULT_BOOKING_DOCTORS,
+  DEFAULT_HOSPITALS,
   campusForHospital,
   filterDoctorsForHospital,
   formatSlotDate,
@@ -41,6 +43,35 @@ function defaultScheduleId(practitionerId: string): string {
   return `opd-${slug || practitionerId}-schedule`;
 }
 
+function pickHospitalId(
+  current: string,
+  hospitals: HospitalSummary[],
+  sessionHospitalId?: string | null,
+): string {
+  if (current && hospitals.some((h) => h.id === current)) {
+    return current;
+  }
+  if (sessionHospitalId && hospitals.some((h) => h.id === sessionHospitalId)) {
+    return sessionHospitalId;
+  }
+  return hospitals[0]?.id ?? "";
+}
+
+function practitionersFromBookingDoctors(doctors: BookingDoctor[]): PractitionerSummary[] {
+  return doctors.map((doctor) => ({
+    practitioner_id: doctor.practitioner_id,
+    name: doctor.name,
+    active: true,
+  }));
+}
+
+function pickPractitionerId(current: string, practitioners: PractitionerSummary[]): string {
+  if (current && practitioners.some((p) => p.practitioner_id === current)) {
+    return current;
+  }
+  return practitioners[0]?.practitioner_id ?? "";
+}
+
 function addDays(isoDate: string, days: number): string {
   const date = new Date(`${isoDate}T12:00:00`);
   date.setDate(date.getDate() + days);
@@ -55,6 +86,8 @@ export default function SchedulingBoardPage() {
   const [expandToDate, setExpandToDate] = useState(() => addDays(todayIsoDate(), 6));
   const [doctors, setDoctors] = useState<BookingDoctor[]>([]);
   const [selectedPractitionerId, setSelectedPractitionerId] = useState("");
+  /** Explicit schedule for board/expand — may differ from booking-doctors default after create. */
+  const [selectedScheduleId, setSelectedScheduleId] = useState("");
   const [hospitalsLoading, setHospitalsLoading] = useState(true);
   const [doctorsLoading, setDoctorsLoading] = useState(false);
   const [slots, setSlots] = useState<SlotSummary[]>([]);
@@ -95,28 +128,33 @@ export default function SchedulingBoardPage() {
     [doctors, selectedPractitionerId],
   );
 
+  const activeScheduleId = selectedScheduleId || selectedDoctor?.schedule_id || "";
+
   useEffect(() => {
     let cancelled = false;
     setHospitalsLoading(true);
     void listHospitals()
       .then((res) => {
         if (cancelled) return;
-        setHospitals(res.hospitals);
-        setSelectedHospitalId((current) => {
-          if (current && res.hospitals.some((h) => h.id === current)) {
-            return current;
-          }
-          if (session?.hospital_id && res.hospitals.some((h) => h.id === session.hospital_id)) {
-            return session.hospital_id;
-          }
-          return res.hospitals[0]?.id ?? "";
-        });
+        const list =
+          res.hospitals.length > 0
+            ? res.hospitals
+            : DEFAULT_HOSPITALS.map((h) => ({ ...h }));
+        setHospitals(list);
+        setSelectedHospitalId((current) => pickHospitalId(current, list, session?.hospital_id));
+        if (res.hospitals.length === 0) {
+          setError(
+            "No hospitals from foundation API — using demo campuses. Seed Organizations or check permissions.",
+          );
+        }
       })
       .catch((err) => {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : String(err));
-          setHospitals([]);
-        }
+        if (cancelled) return;
+        // Keep pickers usable: fall back to demo campuses / session hospital.
+        const list = DEFAULT_HOSPITALS.map((h) => ({ ...h }));
+        setHospitals(list);
+        setSelectedHospitalId((current) => pickHospitalId(current, list, session?.hospital_id));
+        setError(formatApiError(err));
       })
       .finally(() => {
         if (!cancelled) {
@@ -132,6 +170,7 @@ export default function SchedulingBoardPage() {
     if (!selectedHospitalId) {
       setDoctors([]);
       setSelectedPractitionerId("");
+      setSelectedScheduleId("");
       return;
     }
 
@@ -146,17 +185,25 @@ export default function SchedulingBoardPage() {
           selectedHospitalId,
         );
         setDoctors(scoped);
-        setSelectedPractitionerId((current) =>
-          scoped.some((d) => d.practitioner_id === current)
+        setSelectedPractitionerId((current) => {
+          const next = scoped.some((d) => d.practitioner_id === current)
             ? current
-            : scoped[0]?.practitioner_id ?? "",
-        );
+            : scoped[0]?.practitioner_id ?? "";
+          const doctor = scoped.find((d) => d.practitioner_id === next);
+          setSelectedScheduleId((scheduleCurrent) =>
+            scheduleCurrent && scoped.some((d) => d.schedule_id === scheduleCurrent)
+              ? scheduleCurrent
+              : doctor?.schedule_id ?? "",
+          );
+          return next;
+        });
       })
       .catch(() => {
         if (cancelled) return;
         const scoped = filterDoctorsForHospital(DEFAULT_BOOKING_DOCTORS, selectedHospitalId);
         setDoctors(scoped);
         setSelectedPractitionerId(scoped[0]?.practitioner_id ?? "");
+        setSelectedScheduleId(scoped[0]?.schedule_id ?? "");
       })
       .finally(() => {
         if (!cancelled) {
@@ -169,20 +216,39 @@ export default function SchedulingBoardPage() {
     };
   }, [selectedHospitalId]);
 
-  const reloadDoctors = useCallback(async () => {
-    if (!selectedHospitalId) return;
-    const res = await listBookingDoctors(selectedHospitalId);
-    const scoped = filterDoctorsForHospital(
-      res.doctors.length > 0 ? res.doctors : DEFAULT_BOOKING_DOCTORS,
-      selectedHospitalId,
-    );
-    setDoctors(scoped);
-    setSelectedPractitionerId((current) =>
-      scoped.some((d) => d.practitioner_id === current)
-        ? current
-        : scoped[0]?.practitioner_id ?? "",
-    );
-  }, [selectedHospitalId]);
+  const reloadDoctors = useCallback(
+    async (preferScheduleId?: string, practitionerId?: string) => {
+      if (!selectedHospitalId) return;
+      const res = await listBookingDoctors(selectedHospitalId);
+      let scoped = filterDoctorsForHospital(
+        res.doctors.length > 0 ? res.doctors : DEFAULT_BOOKING_DOCTORS,
+        selectedHospitalId,
+      );
+      if (preferScheduleId && practitionerId) {
+        scoped = scoped.map((doctor) =>
+          doctor.practitioner_id === practitionerId
+            ? { ...doctor, schedule_id: preferScheduleId }
+            : doctor,
+        );
+      }
+      setDoctors(scoped);
+      setSelectedPractitionerId((current) => {
+        const next =
+          (practitionerId && scoped.some((d) => d.practitioner_id === practitionerId)
+            ? practitionerId
+            : null) ??
+          (scoped.some((d) => d.practitioner_id === current)
+            ? current
+            : scoped[0]?.practitioner_id ?? "");
+        const doctor = scoped.find((d) => d.practitioner_id === next);
+        setSelectedScheduleId(
+          preferScheduleId ?? doctor?.schedule_id ?? "",
+        );
+        return next;
+      });
+    },
+    [selectedHospitalId],
+  );
 
   useEffect(() => {
     if (!canProvisionSchedules) {
@@ -194,18 +260,19 @@ export default function SchedulingBoardPage() {
     void listPractitioners()
       .then((res) => {
         if (cancelled) return;
-        setPractitioners(res.practitioners);
-        setSchedulePractitionerId((current) => {
-          if (current && res.practitioners.some((p) => p.practitioner_id === current)) {
-            return current;
-          }
-          return res.practitioners[0]?.practitioner_id ?? "";
-        });
+        const listed =
+          res.practitioners.length > 0
+            ? res.practitioners
+            : practitionersFromBookingDoctors(DEFAULT_BOOKING_DOCTORS);
+        setPractitioners(listed);
+        setSchedulePractitionerId((current) => pickPractitionerId(current, listed));
       })
-      .catch(() => {
-        if (!cancelled) {
-          setPractitioners([]);
-        }
+      .catch((err) => {
+        if (cancelled) return;
+        const listed = practitionersFromBookingDoctors(DEFAULT_BOOKING_DOCTORS);
+        setPractitioners(listed);
+        setSchedulePractitionerId((current) => pickPractitionerId(current, listed));
+        setError(formatApiError(err));
       })
       .finally(() => {
         if (!cancelled) {
@@ -217,6 +284,26 @@ export default function SchedulingBoardPage() {
     };
   }, [canProvisionSchedules]);
 
+  // Prefer live booking-doctors list when API practitioners were empty / fallback-only.
+  useEffect(() => {
+    if (!canProvisionSchedules || practitionersLoading || doctors.length === 0) {
+      return;
+    }
+    const fromBoard = practitionersFromBookingDoctors(doctors);
+    setPractitioners((current) => {
+      const onlyDemo =
+        current.length === 0 ||
+        current.every((p) =>
+          DEFAULT_BOOKING_DOCTORS.some((d) => d.practitioner_id === p.practitioner_id),
+        );
+      if (!onlyDemo && current.length > 0) {
+        return current;
+      }
+      return fromBoard;
+    });
+    setSchedulePractitionerId((current) => pickPractitionerId(current, fromBoard));
+  }, [canProvisionSchedules, practitionersLoading, doctors]);
+
   useEffect(() => {
     if (schedulePractitionerId) {
       setScheduleIdInput(defaultScheduleId(schedulePractitionerId));
@@ -227,47 +314,62 @@ export default function SchedulingBoardPage() {
     setExpandToDate(addDays(date, 6));
   }, [date]);
 
-  const loadBoard = useCallback(async () => {
-    if (!date || !selectedDoctor) return;
+  const loadBoard = useCallback(async (): Promise<number> => {
+    if (!date || !activeScheduleId) {
+      setSlots([]);
+      return 0;
+    }
     setLoading(true);
     setError(null);
     try {
       const res = await findSlots({
-        schedule_id: selectedDoctor.schedule_id,
+        schedule_id: activeScheduleId,
         start: date,
         end: date,
       });
       setSlots(res.slots);
       setLastUpdated(new Date());
+      return res.slots.length;
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(formatApiError(err));
       setSlots([]);
+      return 0;
     } finally {
       setLoading(false);
     }
-  }, [date, selectedDoctor]);
+  }, [date, activeScheduleId]);
 
   useEffect(() => {
     void loadBoard();
   }, [loadBoard]);
 
   async function onExpandSlots() {
-    if (!selectedDoctor || !canProvisionSchedules) return;
+    if (!selectedDoctor || !activeScheduleId || !canProvisionSchedules) return;
     setExpanding(true);
     setError(null);
     setFeedback(null);
     try {
-      const result = await expandScheduleSlots(selectedDoctor.schedule_id, {
+      const result = await expandScheduleSlots(activeScheduleId, {
         from: date,
         to: expandToDate,
         hospitalId: selectedHospitalId,
       });
-      setFeedback(
-        `Generated ${result.slots_created} slot(s) for ${selectedDoctor.name} (${result.from} → ${result.to}).`,
-      );
-      await loadBoard();
+      const visible = await loadBoard();
+      if (result.slots_created === 0) {
+        setFeedback(
+          `No slots materialized for ${activeScheduleId} (${result.from} → ${result.to}). Check weekdays and that the planning horizon covers that range (horizon end must include the last day).`,
+        );
+      } else if (visible === 0) {
+        setFeedback(
+          `Generated ${result.slots_created} slot(s) for ${selectedDoctor.name} (${result.from} → ${result.to}), but none fall on ${date}. Change the view date to a weekday covered by the schedule recurrence.`,
+        );
+      } else {
+        setFeedback(
+          `Generated ${result.slots_created} slot(s) for ${selectedDoctor.name} (${result.from} → ${result.to}). Showing ${visible} free on ${date}.`,
+        );
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(formatApiError(err));
     } finally {
       setExpanding(false);
     }
@@ -298,7 +400,7 @@ export default function SchedulingBoardPage() {
       setPractitioners(listed.practitioners);
       setSchedulePractitionerId(result.practitioner_id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(formatApiError(err));
     } finally {
       setCreatingPractitioner(false);
     }
@@ -320,17 +422,18 @@ export default function SchedulingBoardPage() {
         weekdays,
         hour: scheduleHour,
         minute: scheduleMinute,
+        // End-of-day so the selected horizon date is inclusive for slot expansion.
         planning_horizon_start: `${horizonStart}T00:00:00+05:30`,
-        planning_horizon_end: `${horizonEnd}T00:00:00+05:30`,
+        planning_horizon_end: `${horizonEnd}T23:59:59+05:30`,
         timezone: "Asia/Kolkata",
       });
       setFeedback(
-        `Created OPD schedule ${result.schedule_id} for ${result.practitioner_id} at ${result.campus_id}.`,
+        `Created OPD schedule ${result.schedule_id} for ${result.practitioner_id} at ${result.campus_id}. Generate slots next.`,
       );
-      await reloadDoctors();
-      setSelectedPractitionerId(result.practitioner_id);
+      setSelectedScheduleId(result.schedule_id);
+      await reloadDoctors(result.schedule_id, result.practitioner_id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(formatApiError(err));
     } finally {
       setCreatingSchedule(false);
     }
@@ -354,25 +457,28 @@ export default function SchedulingBoardPage() {
           <code>Schedule</code> (seeded or expanded below).
         </p>
         {hospitalsLoading ? <p className="muted">Loading hospitals…</p> : null}
-        {hospitals.length > 0 ? (
-          <label className="scope-selector">
-            <span>Hospital</span>
-            <select
-              value={selectedHospitalId}
-              disabled={hospitalsLoading || loading || expanding}
-              onChange={(e) => {
-                setSelectedHospitalId(e.target.value);
-                setFeedback(null);
-              }}
-            >
-              {hospitals.map((hospital) => (
+        <label className="scope-selector">
+          <span>Hospital</span>
+          <select
+            value={selectedHospitalId}
+            disabled={hospitalsLoading || loading || expanding || hospitals.length === 0}
+            onChange={(e) => {
+              setSelectedHospitalId(e.target.value);
+              setFeedback(null);
+              setError(null);
+            }}
+          >
+            {hospitals.length === 0 ? (
+              <option value="">No hospitals available</option>
+            ) : (
+              hospitals.map((hospital) => (
                 <option key={hospital.id} value={hospital.id}>
                   {hospital.name} ({hospital.id})
                 </option>
-              ))}
-            </select>
-          </label>
-        ) : null}
+              ))
+            )}
+          </select>
+        </label>
       </section>
 
       <section className="card">
@@ -382,13 +488,26 @@ export default function SchedulingBoardPage() {
             <select
               value={selectedPractitionerId}
               disabled={doctorsLoading || loading || expanding || doctors.length === 0}
-              onChange={(e) => setSelectedPractitionerId(e.target.value)}
+              onChange={(e) => {
+                const practitionerId = e.target.value;
+                setSelectedPractitionerId(practitionerId);
+                const doctor = doctors.find((d) => d.practitioner_id === practitionerId);
+                setSelectedScheduleId(doctor?.schedule_id ?? "");
+                setFeedback(null);
+                setError(null);
+              }}
             >
-              {doctors.map((doctor) => (
-                <option key={doctor.practitioner_id} value={doctor.practitioner_id}>
-                  {doctor.name}
+              {doctors.length === 0 ? (
+                <option value="">
+                  {doctorsLoading ? "Loading doctors…" : "No doctors for this hospital"}
                 </option>
-              ))}
+              ) : (
+                doctors.map((doctor) => (
+                  <option key={doctor.practitioner_id} value={doctor.practitioner_id}>
+                    {doctor.name}
+                  </option>
+                ))
+              )}
             </select>
           </label>
           <label>
@@ -418,7 +537,7 @@ export default function SchedulingBoardPage() {
         ) : null}
         {selectedDoctor ? (
           <p className="muted">
-            Schedule <code>{selectedDoctor.schedule_id}</code>
+            Schedule <code>{activeScheduleId || selectedDoctor.schedule_id}</code>
             {selectedDoctor.location_id ? (
               <>
                 {" "}
@@ -444,10 +563,10 @@ export default function SchedulingBoardPage() {
 
         {loading ? <p className="muted">Loading schedule…</p> : null}
 
-        {!loading && !error && slots.length === 0 && selectedDoctor ? (
+        {!loading && slots.length === 0 && selectedDoctor && activeScheduleId ? (
           <p className="muted">
-            No free slots on this date. Expand the schedule below to generate bookable slots from
-            the doctor&apos;s recurrence rule.
+            No free slots on <code>{date}</code> for <code>{activeScheduleId}</code>. Expand below
+            for a range that includes this date, and confirm the schedule weekdays cover it.
           </p>
         ) : null}
 
@@ -463,9 +582,8 @@ export default function SchedulingBoardPage() {
         <section className="card">
           <h2>Generate OPD slots</h2>
           <p className="muted">
-            Creates FHIR <code>Slot</code> resources from{" "}
-            <code>{selectedDoctor.schedule_id}</code>&apos;s recurrence rule for the date range
-            below. Existing slots are skipped.
+            Creates FHIR <code>Slot</code> resources from <code>{activeScheduleId}</code>&apos;s
+            recurrence rule for the date range below. Re-running overwrites the same slot IDs.
           </p>
           {canProvisionSchedules ? (
             <div className="board-toolbar">
@@ -583,14 +701,23 @@ export default function SchedulingBoardPage() {
                   Practitioner
                   <select
                     value={schedulePractitionerId}
-                    disabled={creatingSchedule || practitioners.length === 0}
+                    disabled={creatingSchedule || practitionersLoading || practitioners.length === 0}
                     onChange={(e) => setSchedulePractitionerId(e.target.value)}
                   >
-                    {practitioners.map((practitioner) => (
-                      <option key={practitioner.practitioner_id} value={practitioner.practitioner_id}>
-                        {practitioner.name} ({practitioner.practitioner_id})
+                    {practitioners.length === 0 ? (
+                      <option value="">
+                        {practitionersLoading ? "Loading…" : "No practitioners available"}
                       </option>
-                    ))}
+                    ) : (
+                      practitioners.map((practitioner) => (
+                        <option
+                          key={practitioner.practitioner_id}
+                          value={practitioner.practitioner_id}
+                        >
+                          {practitioner.name} ({practitioner.practitioner_id})
+                        </option>
+                      ))
+                    )}
                   </select>
                 </label>
                 <label>

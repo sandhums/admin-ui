@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
-import { getSession } from "../api/bff";
+import {getSession, formatApiError} from "../api/bff";
 import {
   admitPatient,
   dischargePatient,
@@ -74,7 +74,7 @@ export default function BedBoardPage() {
       const res = await getBedBoard(wardFilter ? { ward_id: wardFilter } : undefined);
       setBeds(res.beds);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(formatApiError(err));
       // Keep prior beds on scoped ward 403 so the grid does not flash empty; ward
       // picker options come from session.accessible_wards, not bed rows.
       if (!wardRestricted) {
@@ -164,7 +164,7 @@ export default function BedBoardPage() {
       }
       setAdmitDraft({ ...admitDraft, matches: res.matches, selected: null });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(formatApiError(err));
     } finally {
       setLookingUp(false);
     }
@@ -203,7 +203,7 @@ export default function BedBoardPage() {
       setAdmitDraft(null);
       await loadBoard();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(formatApiError(err));
     } finally {
       setAdmitting(false);
     }
@@ -226,7 +226,7 @@ export default function BedBoardPage() {
       setNotice(`Discharged ${label}; ${bed.bed_name} is available.`);
       await loadBoard();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(formatApiError(err));
     } finally {
       setDischargingId(null);
     }

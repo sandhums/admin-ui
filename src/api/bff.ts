@@ -7,9 +7,17 @@ export const BFF_LOGIN_ORIGIN =
   (import.meta.env.DEV ? "http://localhost:8084" : "");
 
 export type { BffErrorBody, DuplicateMatch } from "./errors";
-export { BffError } from "./errors";
+export {
+  AUTH_REQUIRED_EVENT,
+  BffError,
+  formatApiError,
+  formatOAuthError,
+  handleApiError,
+  humanizeApiMessage,
+  notifyAuthRequired,
+} from "./errors";
 
-import { BffError, type BffErrorBody } from "./errors";
+import { BffError, type BffErrorBody, notifyAuthRequired } from "./errors";
 
 export type SessionInfo = {
   authenticated: boolean;
@@ -41,6 +49,15 @@ async function parseErrorBody(res: Response): Promise<BffErrorBody> {
   }
 }
 
+function shouldNotifyAuthRequired(path: string): boolean {
+  return (
+    !path.startsWith("/bff/session") &&
+    !path.startsWith("/bff/staff/dev-login") &&
+    !path.startsWith("/bff/logout") &&
+    !path.startsWith("/bff/login")
+  );
+}
+
 export async function bffFetch(path: string, init?: RequestInit) {
   const res = await fetch(`${BFF_BASE}${path}`, {
     ...init,
@@ -52,6 +69,9 @@ export async function bffFetch(path: string, init?: RequestInit) {
   });
   if (!res.ok) {
     const body = await parseErrorBody(res);
+    if (res.status === 401 && shouldNotifyAuthRequired(path)) {
+      notifyAuthRequired("admin");
+    }
     throw new BffError(res.status, body);
   }
   if (res.status === 204) return null;
